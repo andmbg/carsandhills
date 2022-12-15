@@ -1,0 +1,262 @@
+---
+title: "Reticulatest"
+output: html_document
+date: "2022-12-10"
+---
+
+
+# Intro
+
+Wir haben Daten dazu, wie viele PKW mit bestimmten Eigenschaften (Hubraum, Allradantrieb) in welchen Landkreisen zugelassen sind.
+Was uns hier interessiert: Hängt die Tendenz zum antriebsstarken Fahrzeug damit zusammen, wie hügelig eine Region ist?
+Als Alternative Variable, die diese Varianz aufklären könnte benutzen wir das Bruttoinlandsprodukt der Kreise.
+
+## Datenquellen
+
+- *Zulassungsdaten:*
+  https://www.kba.de/SharedDocs/Downloads/DE/Statistik/Fahrzeuge/FZ1/fz1_2022.xlsx
+
+- *Landkreisgrenzen:*
+  https://daten.gdz.bkg.bund.de/produkte/vg/vg2500/aktuell/vg2500_12-31.utm32s.shape.zip
+
+- *Höhenmodell:*
+  https://daten.gdz.bkg.bund.de/produkte/dgm/dgm200/aktuell/dgm200.utm32s.geotiff.zip
+
+- *Bruttowertschöpfung:*
+  https://www.statistikportal.de/sites/default/files/2022-07/vgrdl_r2b1_bs2021.xlsx
+
+
+```{r message=FALSE, warning=FALSE}
+library(reticulate)
+library(tidyverse)
+library(readxl)
+library(raster)
+library(terra)
+library(spatialEco)
+```
+
+
+# Download
+
+```{r}
+dir.create("download", showWarnings = FALSE)
+dir.create("data", showWarnings = FALSE)
+options(timeout = 300) # Höhenmodell hatte timeouts beim Download
+
+# Zulassungsdaten:
+download.file("https://www.kba.de/SharedDocs/Downloads/DE/Statistik/Fahrzeuge/FZ1/fz1_2022.xlsx?__blob=publicationFile&v=5", destfile = "download/Zulassungen.xlsx")
+download.file("https://daten.gdz.bkg.bund.de/produkte/vg/vg2500/aktuell/vg2500_12-31.utm32s.shape.zip", destfile = "download/Kreisgrenzen.zip")
+download.file("https://daten.gdz.bkg.bund.de/produkte/dgm/dgm200/aktuell/dgm200.utm32s.geotiff.zip", destfile = "download/Höhenmodell.zip")
+download.file("https://www.statistikportal.de/sites/default/files/2022-07/vgrdl_r2b1_bs2021.xlsx", destfile = "download/BIP.xlsx")
+
+unzip("download/Kreisgrenzen.zip", exdir = "download/Kreisgrenzen")
+unzip("download/Höhenmodell.zip", exdir = "download/Höhenmodell")
+```
+
+
+
+
+
+# Zulassungsdaten
+
+Pro Kreis die Anzahl Zulassungen nach Hubraum:
+
+```{r message=FALSE}
+pkw_cm3 <- read_excel("download/Zulassungen.xlsx",
+                      sheet = "FZ1.1",
+                      skip = 8 )
+
+colnames(pkw_cm3) <- str_replace_all(colnames(pkw_cm3), "[^a-zA-Z0-9]", "_")
+
+pkw_cm3 <- pkw_cm3 |> 
+  transmute( id_bezirk = Statistische_Kennziffer_und_Zulassungsbezirk,
+             krs_code = str_extract(id_bezirk, "^[0-9]+"),
+             id_bezirk = NULL,
+             pkw_gesamt = insgesamt___9,
+             max_cm3_1399 = Hubraum__bis___1_399_cm_,
+             max_cm3_1999 = `1_400__bis__1_999_cm_`,
+             cm3_over_1999 = `2_000__und__mehr_cm_` ) |> 
+  filter(!is.na(krs_code))
+
+# fill up NAs in `land` column
+# land <- pkw_cm3$land
+# 
+# lastname <- land[1]
+# for( i in 2:length(land) ){
+#   if( is.na(land[i]) ) land[i] <- lastname
+#   else lastname <- land[i]
+# }
+# 
+# pkw_cm3$land <- land
+```
+
+
+
+... und Euronorm:
+
+```{r message=FALSE}
+pkw_euro <- read_excel("download/Zulassungen.xlsx",
+                       sheet = "FZ1.2",
+                       skip = 8)
+
+colnames(pkw_euro) <- str_replace_all(colnames(pkw_euro), "[^a-zA-Z0-9]", "_")
+
+pkw_euro <- pkw_euro |> 
+  transmute( krs_code = str_extract(`___3`, "^[0-9]+"),
+             euro_1 = Euro_1___12,
+             euro_2 = Euro_2___13,
+             euro_3 = Euro_3___14,
+             euro_4 = Euro_4___15,
+             euro_5 = Euro_5___16,
+             euro_6 = Euro_6___17 ) |> 
+  filter(!is.na(krs_code))
+
+# fill up NAs in `land` column
+# land <- pkw_euro$land
+
+# lastname <- land[1]
+# for( i in 2:length(land) ){
+#   if( is.na(land[i]) ) land[i] <- lastname
+#   else lastname <- land[i]
+# }
+
+# pkw_euro$land <- land
+```
+
+
+
+## Zu einem Gesamtdatensatz zusammenfügen
+
+```{r}
+data <- pkw_cm3 |> 
+  inner_join(pkw_euro, by = c("krs_code")) |> 
+
+  # Anteile statt Absolutzahlen:
+  mutate( max_cm3_1399 = max_cm3_1399 / pkw_gesamt * 100,
+          max_cm3_1999 = max_cm3_1999 / pkw_gesamt * 100,
+          cm3_over_1999 = cm3_over_1999 / pkw_gesamt * 100,
+          euro_1 = euro_1 / pkw_gesamt * 100,
+          euro_2 = euro_2 / pkw_gesamt * 100,
+          euro_3 = euro_3 / pkw_gesamt * 100,
+          euro_4 = euro_4 / pkw_gesamt * 100,
+          euro_5 = euro_5 / pkw_gesamt * 100,
+          euro_6 = euro_6 / pkw_gesamt * 100
+          )
+```
+
+
+
+# Bruttoinlandsprodukt
+
+Genauer: BIP in jeweiligen Preisen je Einwohner.
+
+```{r}
+bip <- read_excel("download/BIP.xlsx",
+                  sheet = "6.",
+                  range = "C5:AJ451" ) |>
+  transmute( krs_code = `Regional-schlüssel`,
+             bip = `2020`) |> 
+  slice(-1) |> 
+  # Länder & Reg.-Bez. ignorieren:
+  filter(nchar(krs_code) == 5)
+```
+
+## Zum Gesamtdatensatz hinzufügen
+
+```{r}
+data <- data |> 
+  inner_join( bip, by = "krs_code")
+```
+
+
+
+
+
+# Umrissdaten der Landkreise
+
+```{python}
+import pandas as pd
+import geopandas as gpd
+import plotly.express as px
+import rioxarray
+from pyproj import CRS
+```
+
+```{python}
+kreise = gpd.read_file("download/Kreisgrenzen/vg2500_12-31.utm32s.shape/vg2500/VG2500_KRS.shp").\
+           loc[:,["AGS", "GEN", "geometry"]].\
+           rename({"AGS": "krs_code",
+                   "GEN": "name"}, axis = 1)
+kreise.set_index("krs_code", inplace = True)
+kreise = kreise.to_crs(epsg = "4326")
+```
+
+
+
+## Zum Gesamtdatensatz hinzufügen
+
+```{python}
+data = r.data
+data = pd.merge(left  = data,   left_on  = "krs_code",
+                right = kreise, right_on = "krs_code")
+data = gpd.GeoDataFrame(data)
+```
+
+
+
+# Höhenmodell und Geländerauhheit per Kreis
+
+
+Terrain Ruggedness Index herstellen:
+
+```{r}
+dem_d <- terra::rast("download/Höhenmodell/dgm200.utm32s.geotiff/dgm200/dgm200_utm32s.tif")
+# dieser Prozess dauert > 1 Minute:
+ruggedness_d <- spatialEco::tri(dem_d)
+terra::writeRaster(ruggedness_d, "data/TRI_DEM200_Deutschland.tif", overwrite = TRUE)
+```
+
+Ruggedness-Daten in python laden... 
+
+```{python}
+
+ruggedness_d = rioxarray.open_rasterio("data/TRI_DEM200_Deutschland.tif")
+ruggedness_d = ruggedness_d.rio.set_crs(25832)
+ruggedness_d = ruggedness_d.rio.reproject("EPSG:4326")
+```
+
+## Zum Gesamtdatensatz hinzufügen
+
+```{python}
+rug_averages = []
+
+for i in range(len(data)):
+  # nimm jeden Kreis-Umriss,
+  this_geo = [data.iloc[i]["geometry"]]
+  # isoliere den Teil des TRI-Rasters, der darunter liegt
+  this_raster = ruggedness_d.rio.clip(this_geo)
+  # und ermittle durchschnittliche Rauhheit
+  this_avg = float(this_raster.mean())
+  rug_averages.append(this_avg)
+
+data["m_rugged"] = rug_averages
+```
+
+Kosmetik vor der Speicherung:
+
+```{python}
+data.drop("geometry", axis = 1, inplace = True)
+data = data[["name",
+             "krs_code",
+             "m_rugged",
+             "bip",
+             "max_cm3_1399", "max_cm3_1999", "cm3_over_1999",
+             "euro_1", "euro_2", "euro_3", "euro_4", "euro_5", "euro_6",
+             "pkw_gesamt"]]
+
+data.pkw_gesamt = data.pkw_gesamt.astype("int")
+
+import csv
+data.to_csv("data/krs_pkw_rug.csv", index = False, quoting = csv.QUOTE_NONNUMERIC)
+```
+
