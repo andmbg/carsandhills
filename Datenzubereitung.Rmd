@@ -28,9 +28,9 @@ Als Alternative Variable, die diese Varianz aufklären könnte benutzen wir das 
 
 ```{r message=FALSE, warning=FALSE}
 library(reticulate)
+library(raster)
 library(tidyverse)
 library(readxl)
-library(raster)
 library(terra)
 library(spatialEco)
 ```
@@ -132,15 +132,15 @@ data <- pkw_cm3 |>
   inner_join(pkw_euro, by = c("krs_code")) |> 
 
   # Anteile statt Absolutzahlen:
-  mutate( max_cm3_1399 = max_cm3_1399 / pkw_gesamt * 100,
-          max_cm3_1999 = max_cm3_1999 / pkw_gesamt * 100,
-          cm3_over_1999 = cm3_over_1999 / pkw_gesamt * 100,
-          euro_1 = euro_1 / pkw_gesamt * 100,
-          euro_2 = euro_2 / pkw_gesamt * 100,
-          euro_3 = euro_3 / pkw_gesamt * 100,
-          euro_4 = euro_4 / pkw_gesamt * 100,
-          euro_5 = euro_5 / pkw_gesamt * 100,
-          euro_6 = euro_6 / pkw_gesamt * 100
+  mutate( max_cm3_1399_pct = max_cm3_1399 / pkw_gesamt * 100,
+          max_cm3_1999_pct = max_cm3_1999 / pkw_gesamt * 100,
+          cm3_over_1999_pct = cm3_over_1999 / pkw_gesamt * 100,
+          euro_1_pct = euro_1 / pkw_gesamt * 100,
+          euro_2_pct = euro_2 / pkw_gesamt * 100,
+          euro_3_pct = euro_3 / pkw_gesamt * 100,
+          euro_4_pct = euro_4 / pkw_gesamt * 100,
+          euro_5_pct = euro_5 / pkw_gesamt * 100,
+          euro_6_pct = euro_6 / pkw_gesamt * 100
           )
 ```
 
@@ -148,17 +148,23 @@ data <- pkw_cm3 |>
 
 # Bruttoinlandsprodukt
 
-Genauer: BIP in jeweiligen Preisen je Einwohner.
+Genauer: BIP in jeweiligen Preisen je Erwerbstätigen.
 
 ```{r}
 bip <- read_excel("download/BIP.xlsx",
                   sheet = "6.",
                   range = "C5:AJ451" ) |>
   transmute( krs_code = `Regional-schlüssel`,
+             nuts3 = `NUTS 3`,
              bip = `2020`) |> 
   slice(-1) |> 
   # Länder & Reg.-Bez. ignorieren:
-  filter(nchar(krs_code) == 5)
+  filter(nuts3 == 3) |> 
+  # die 2-stelligen Codes von HH und B mit Nullen auffüllen
+  # (mit Dank an dieses krumme Code-Format, das Nullen an Anfang und Ende erlaubt
+  # und dann auch noch inkonsistent benutzt wird)
+  mutate(krs_code = krs_code |> map_chr(~ paste0(., paste0(rep("0", 5-nchar(.)), collapse = "")))) |> 
+  dplyr::select(-nuts3)
 ```
 
 ## Zum Gesamtdatensatz hinzufügen
@@ -219,7 +225,6 @@ terra::writeRaster(ruggedness_d, "data/TRI_DEM200_Deutschland.tif", overwrite = 
 Ruggedness-Daten in python laden... 
 
 ```{python}
-
 ruggedness_d = rioxarray.open_rasterio("data/TRI_DEM200_Deutschland.tif")
 ruggedness_d = ruggedness_d.rio.set_crs(25832)
 ruggedness_d = ruggedness_d.rio.reproject("EPSG:4326")
@@ -245,17 +250,19 @@ data["m_rugged"] = rug_averages
 Kosmetik vor der Speicherung:
 
 ```{python}
-data.drop("geometry", axis = 1, inplace = True)
-data = data[["name",
-             "krs_code",
-             "m_rugged",
-             "bip",
-             "max_cm3_1399", "max_cm3_1999", "cm3_over_1999",
-             "euro_1", "euro_2", "euro_3", "euro_4", "euro_5", "euro_6",
-             "pkw_gesamt"]]
-
-data.pkw_gesamt = data.pkw_gesamt.astype("int")
-
+data = data.drop("geometry", axis = 1)
+data = data.astype(dict(pkw_gesamt = int,
+                        max_cm3_1399 = int,
+                        max_cm3_1999 = int,
+                        cm3_over_1999 = int,
+                        euro_1 = int,
+                        euro_2 = int,
+                        euro_3 = int,
+                        euro_4 = int,
+                        euro_5 = int,
+                        euro_6 = int,
+                        bip = int
+                        ))
 import csv
 data.to_csv("data/krs_pkw_rug.csv", index = False, quoting = csv.QUOTE_NONNUMERIC)
 ```
