@@ -13,19 +13,16 @@ Als Alternative Variable, die diese Varianz aufklären könnte benutzen wir das 
 
 ## Datenquellen
 
-- *Zulassungsdaten:*
+- *Zulassungsdaten: Kraftfahrtbundesamt*
   https://www.kba.de/SharedDocs/Downloads/DE/Statistik/Fahrzeuge/FZ1/fz1_2022.xlsx
 
-- *Landkreisgrenzen:*
-  https://daten.gdz.bkg.bund.de/produkte/vg/vg2500/aktuell/vg2500_12-31.utm32s.shape.zip
-
-- *Höhenmodell:*
+- *Landkreisgrenzen und Höhenmodell: Geodatenzentrum des Bundesamtes für Kartographie und Geodäsie*
+  https://daten.gdz.bkg.bund.de/produkte/vg/vg2500/aktuell/vg2500_12-31.utm32s.shape.zip  
   https://daten.gdz.bkg.bund.de/produkte/dgm/dgm200/aktuell/dgm200.utm32s.geotiff.zip
 
-- *Bruttowertschöpfung:*
-  https://www.statistikportal.de/sites/default/files/2022-07/vgrdl_r2b1_bs2021.xlsx
-
-
+- *Haushaltseinkommen pro Kopf: Statistische Ämter des Bundes und der Länder*
+  https://www.statistikportal.de/sites/default/files/2022-10/vgrdl_r2b3_bs2021_0.xlsx
+  
 ```{r message=FALSE, warning=FALSE}
 library(reticulate)
 library(raster)
@@ -47,7 +44,7 @@ options(timeout = 300) # Höhenmodell hatte timeouts beim Download
 download.file("https://www.kba.de/SharedDocs/Downloads/DE/Statistik/Fahrzeuge/FZ1/fz1_2022.xlsx?__blob=publicationFile&v=5", destfile = "download/Zulassungen.xlsx")
 download.file("https://daten.gdz.bkg.bund.de/produkte/vg/vg2500/aktuell/vg2500_12-31.utm32s.shape.zip", destfile = "download/Kreisgrenzen.zip")
 download.file("https://daten.gdz.bkg.bund.de/produkte/dgm/dgm200/aktuell/dgm200.utm32s.geotiff.zip", destfile = "download/Höhenmodell.zip")
-download.file("https://www.statistikportal.de/sites/default/files/2022-07/vgrdl_r2b1_bs2021.xlsx", destfile = "download/BIP.xlsx")
+download.file("https://www.statistikportal.de/sites/default/files/2022-10/vgrdl_r2b3_bs2021_0.xlsx", destfile = "download/Einkommen.xlsx")
 
 unzip("download/Kreisgrenzen.zip", exdir = "download/Kreisgrenzen")
 unzip("download/Höhenmodell.zip", exdir = "download/Höhenmodell")
@@ -146,18 +143,16 @@ data <- pkw_cm3 |>
 
 
 
-# Bruttoinlandsprodukt
-
-Genauer: BIP in jeweiligen Preisen je Erwerbstätigen.
+# Haushaltseinkommen
 
 ```{r}
-bip <- read_excel("download/BIP.xlsx",
-                  sheet = "6.",
-                  range = "C5:AJ451" ) |>
+income <- read_excel("download/Einkommen.xlsx",
+                     sheet = "2.4",
+                     range = "A5:AH451" ) |>
+  slice(-1) |> 
   transmute( krs_code = `Regional-schlüssel`,
              nuts3 = `NUTS 3`,
-             bip = `2020`) |> 
-  slice(-1) |> 
+             income = `2020`) |> 
   # Länder & Reg.-Bez. ignorieren:
   filter(nuts3 == 3) |> 
   # die 2-stelligen Codes von HH und B mit Nullen auffüllen
@@ -171,7 +166,7 @@ bip <- read_excel("download/BIP.xlsx",
 
 ```{r}
 data <- data |> 
-  inner_join( bip, by = "krs_code")
+  inner_join( income, by = "krs_code")
 ```
 
 
@@ -261,7 +256,7 @@ data = data.astype(dict(pkw_gesamt = int,
                         euro_4 = int,
                         euro_5 = int,
                         euro_6 = int,
-                        bip = int
+                        income = int
                         ))
 import csv
 data.to_csv("data/krs_pkw_rug.csv", index = False, quoting = csv.QUOTE_NONNUMERIC)
